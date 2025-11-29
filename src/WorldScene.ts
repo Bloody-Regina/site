@@ -39,6 +39,10 @@ export default class WorldScene extends Phaser.Scene {
   private readonly tileSize = 32;
   private readonly chunkTileSize = 64;
   private readonly chunkViewDistance = 1;
+  private npcs: Phaser.GameObjects.Sprite[] = [];
+  private nearbyNpc: Phaser.GameObjects.Sprite | null = null;
+  private interactionHint?: Phaser.GameObjects.Text;
+  private interactionKeys?: Phaser.Input.Keyboard.Key[];
 
   constructor() {
     super('WorldScene');
@@ -102,6 +106,11 @@ export default class WorldScene extends Phaser.Scene {
       right: Phaser.Input.Keyboard.KeyCodes.D,
     }) as Record<'up' | 'down' | 'left' | 'right', Phaser.Input.Keyboard.Key>;
 
+    this.interactionKeys = [
+      keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.E),
+      keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE),
+    ];
+
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
       this.pointerDirection = new Phaser.Math.Vector2(
         pointer.worldX - this.player.x,
@@ -139,6 +148,9 @@ export default class WorldScene extends Phaser.Scene {
     velocity.normalize().scale(this.velocity);
     body.setVelocity(velocity.x, velocity.y);
 
+    this.updateNearbyNpc();
+    this.handleNpcInteraction();
+
     if (Math.abs(body.velocity.x) > 0 || Math.abs(body.velocity.y) > 0) {
       this.saveData.player = { x: this.player.x, y: this.player.y };
       this.persist();
@@ -165,6 +177,7 @@ export default class WorldScene extends Phaser.Scene {
       npc.setData('dialog.en', this.findProperty(obj, 'dialog.en'));
       npc.setData('dialog.zh', this.findProperty(obj, 'dialog.zh'));
       npc.on('pointerdown', () => this.showDialog(npc));
+      this.npcs.push(npc);
       return npc;
     }
 
@@ -219,6 +232,20 @@ export default class WorldScene extends Phaser.Scene {
 
     this.langButton = this.add.text(12, 520, '', style).setInteractive({ useHandCursor: true }).setScrollFactor(0);
     this.musicButton = this.add.text(12, 550, '', style).setInteractive({ useHandCursor: true }).setScrollFactor(0);
+
+    this.interactionHint = this.add
+      .text(0, 0, 'Press E / Tap to talk', {
+        ...style,
+        fontSize: '14px',
+      })
+      .setDepth(5)
+      .setVisible(false);
+
+    this.interactionHint.on('pointerdown', () => {
+      if (this.nearbyNpc) {
+        this.showDialog(this.nearbyNpc);
+      }
+    });
 
     this.langButton.on('pointerdown', () => {
       this.lang = this.lang === 'en' ? 'zh' : 'en';
@@ -305,6 +332,44 @@ export default class WorldScene extends Phaser.Scene {
       this.updateUiText();
     } else {
       this.sound.once(Phaser.Sound.Events.UNLOCKED, () => this.tryStartBgm(true));
+    }
+  }
+
+  private updateNearbyNpc() {
+    if (!this.interactionHint) return;
+
+    const maxDistance = 64;
+    let closestNpc: Phaser.GameObjects.Sprite | null = null;
+    let closestDistance = Number.MAX_VALUE;
+
+    this.npcs.forEach((npc) => {
+      const distance = Phaser.Math.Distance.Between(npc.x, npc.y, this.player.x, this.player.y);
+      if (distance < maxDistance && distance < closestDistance) {
+        closestDistance = distance;
+        closestNpc = npc;
+      }
+    });
+
+    this.nearbyNpc = closestNpc;
+
+    if (closestNpc) {
+      const { x, y } = closestNpc;
+      this.interactionHint.setPosition(x - this.interactionHint.width / 2, y - 50);
+      this.interactionHint.setVisible(true);
+      this.interactionHint.setScrollFactor(1);
+      this.interactionHint.setInteractive({ useHandCursor: true });
+    } else {
+      this.interactionHint.setVisible(false);
+      this.interactionHint.disableInteractive();
+    }
+  }
+
+  private handleNpcInteraction() {
+    if (!this.nearbyNpc || !this.interactionKeys) return;
+
+    const shouldInteract = this.interactionKeys.some((key) => Phaser.Input.Keyboard.JustDown(key));
+    if (shouldInteract) {
+      this.showDialog(this.nearbyNpc);
     }
   }
 
