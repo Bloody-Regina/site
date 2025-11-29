@@ -20,8 +20,8 @@ npm run preview
 
 ## 要点
 
-- 资源中仅保留 JSON/文本：Tiled 地图与 i18n 字典在 `public` 下，其余占位纹理与 BGM 在 `PreloadScene` 中通过 Canvas 和内嵌数据 URI 生成，无需二进制文件。
+- 资源以 JSON/文本为主：Tiled 地图与 i18n 字典在 `public` 下，tileset/NPC 占位纹理通过 Canvas 生成，BGM 改为加载本地 `public/assets/audio/串烧.mp3`。
 - `public/assets/maps/chunk_0_0.json` 为 64×64 Tiled 地图占位，含地表/碰撞/对象层和 NPC 对话字段，可直接替换为你本地导出的真实地图（保持 JSON 文本）。
-- 真实的 PNG tileset/NPC 纹理与 OGG/MP3 BGM 请在本地替换后提交；当前仓库仅包含文本占位与运行时生成逻辑，未包含任何二进制素材。
+- 若要更换曲目，替换 `public/assets/audio/` 下的 MP3/OGG 文件并在 `PreloadScene` 中调整路径即可。
 - `localStorage` 记录语言、音量与玩家位置等信息。
 - 支持键盘方向键/WASD 与触摸点击移动，点击 NPC 显示当前语言的对话。

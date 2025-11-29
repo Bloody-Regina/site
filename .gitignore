@@ -213,6 +213,7 @@ public/assets/**/*.ogg
 # Audio binaries
 public/assets/**/*.wav
 public/assets/**/*.mp3
+!public/assets/audio/串烧.mp3
 
 # Build outputs
 node_modules/

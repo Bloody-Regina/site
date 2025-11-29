@@ -1,5 +1,4 @@
 import Phaser from 'phaser';
-import BGM_DATA_URI from './generatedAudio.txt?raw';
 
 export default class PreloadScene extends Phaser.Scene {
   constructor() {
@@ -8,7 +7,7 @@ export default class PreloadScene extends Phaser.Scene {
 
   preload() {
     this.load.tilemapTiledJSON('chunk_0_0', 'assets/maps/chunk_0_0.json');
-    this.load.audio('bgm', [BGM_DATA_URI]);
+    this.load.audio('bgm', 'assets/audio/串烧.mp3');
     this.load.json('i18n-en', 'i18n/en.json');
     this.load.json('i18n-zh', 'i18n/zh.json');
   }
