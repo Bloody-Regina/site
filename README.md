@@ -18,6 +18,12 @@ npm run build
 npm run preview
 ```
 
+## CI / Pages
+
+- 首次部署后，站点将发布到 `gh-pages` 分支根目录，对应 URL 形式为 `https://<你的 GitHub 用户名>.github.io/site/`（Vite `base` 已固定为 `/site/`）。
+- 部署工作流：在 Actions 中选择 **Deploy to GitHub Pages**，点击 **Run workflow** 可手动触发；推送到 `main` 也会自动部署。
+- 若需自定义域名，请在仓库中添加 `CNAME`（如放在 `public/CNAME` 以便随构建发布）。
+
 ## 要点
 
 - 资源以 JSON/文本为主：Tiled 地图与 i18n 字典在 `public` 下，tileset/NPC 占位纹理通过 Canvas 生成，BGM 改为加载本地 `public/assets/audio/串烧.mp3`。
