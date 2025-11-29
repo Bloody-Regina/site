@@ -31,6 +31,9 @@ export default class WorldScene extends Phaser.Scene {
   private pointerDirection: Phaser.Math.Vector2 | null = null;
   private interacted = false;
   private moveKeys?: Record<'up' | 'down' | 'left' | 'right', Phaser.Input.Keyboard.Key>;
+  private lastVolume = 0.5;
+  private activeDialogKey: string | null = null;
+  private activeDialogOverrides: Partial<Record<LangKey, string>> = {};
 
   constructor() {
     super('WorldScene');
@@ -46,6 +49,7 @@ export default class WorldScene extends Phaser.Scene {
       }
     }
     this.lang = this.saveData.lang;
+    this.lastVolume = this.saveData.volume || 0.5;
   }
 
   create() {
@@ -182,11 +186,20 @@ export default class WorldScene extends Phaser.Scene {
       this.saveData.seenDialogs.push(dialogKey);
       this.persist();
     }
+
+    this.activeDialogKey = dialogKey;
+    this.activeDialogOverrides = {
+      en: npc.getData('dialog.en'),
+      zh: npc.getData('dialog.zh'),
+    };
   }
 
-  private lookup(path: string) {
+  private lookup(path: string): string {
     const dict = this.dictionaries[this.lang];
-    return path.split('.').reduce((obj, key) => (obj ? obj[key] : undefined), dict) || path;
+    const value = path.split('.').reduce((obj, key) => (obj ? obj[key] : undefined), dict);
+    if (typeof value === 'string') return value;
+    if (value !== undefined && value !== null) return String(value);
+    return path;
   }
 
   private createUI() {
@@ -204,6 +217,7 @@ export default class WorldScene extends Phaser.Scene {
       this.lang = this.lang === 'en' ? 'zh' : 'en';
       this.saveData.lang = this.lang;
       this.updateUiText();
+      this.refreshDialogText();
       this.persist();
     });
 
@@ -212,14 +226,13 @@ export default class WorldScene extends Phaser.Scene {
         this.tryStartBgm(true);
         return;
       }
-      if (this.bgm.isPlaying) {
-        this.bgm.pause();
+      const muted = this.bgm.volume <= 0;
+      if (muted) {
+        this.setVolume(this.lastVolume || 0.5);
       } else {
-        this.bgm.resume();
+        this.lastVolume = this.bgm.volume;
+        this.setVolume(0);
       }
-      this.saveData.volume = this.bgm.volume;
-      this.persist();
-      this.updateUiText();
     });
   }
 
@@ -235,9 +248,38 @@ export default class WorldScene extends Phaser.Scene {
     }
 
     if (this.musicButton) {
-      const playing = this.bgm?.isPlaying;
-      this.musicButton.setText(`${musicLabel}: ${playing ? unmute : mute}`);
+      const volume = this.bgm ? this.bgm.volume : this.saveData.volume;
+      const muted = volume <= 0;
+      const volumeLabel = muted ? '' : ` (${Math.round(volume * 100)}%)`;
+      this.musicButton.setText(`${musicLabel}: ${muted ? mute : `${unmute}${volumeLabel}`}`);
     }
+  }
+
+  private refreshDialogText() {
+    if (!this.dialogText || !this.activeDialogKey) return;
+    const override = this.activeDialogOverrides[this.lang];
+    const dialogText = override || this.lookup(this.activeDialogKey);
+    this.dialogText.setText(dialogText);
+  }
+
+  private setVolume(volume: number) {
+    this.saveData.volume = volume;
+    if (volume > 0) {
+      this.lastVolume = volume;
+    }
+    if (this.bgm) {
+      this.bgm.volume = volume;
+      if (!this.bgm.isPlaying && volume > 0) {
+        this.bgm.play({ loop: true, volume });
+      }
+      if (volume === 0 && this.bgm.isPlaying) {
+        this.bgm.pause();
+      } else if (volume > 0 && this.bgm.isPaused) {
+        this.bgm.resume();
+      }
+    }
+    this.persist();
+    this.updateUiText();
   }
 
   private tryStartBgm(force = false) {

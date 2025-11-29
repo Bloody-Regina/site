@@ -213,3 +213,7 @@ public/assets/**/*.ogg
 # Audio binaries
 public/assets/**/*.wav
 public/assets/**/*.mp3
+
+# Build outputs
+node_modules/
+dist/
