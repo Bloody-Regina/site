@@ -139,6 +139,8 @@ export default class ChunkManager {
 
     const groundLayer = map.createLayer('ground', tileset, offsetX, offsetY) ?? undefined;
     const collisionLayer = map.createLayer('collision', tileset, offsetX, offsetY) ?? undefined;
+    groundLayer?.setDepth(0);
+    collisionLayer?.setDepth(1);
     collisionLayer?.setCollisionBetween(1, 1000);
 
     const collider = collisionLayer

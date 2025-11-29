@@ -73,6 +73,7 @@ export default class WorldScene extends Phaser.Scene {
     graphics.generateTexture('player-rect', 24, 32);
     graphics.destroy();
     this.player.setTexture('player-rect');
+    this.player.setDepth(2);
 
     this.chunkManager = new ChunkManager(this, {
       tileSize: this.tileSize,
