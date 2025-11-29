@@ -1,0 +1,16 @@
+{
+  "ui": {
+    "title": "Phaser Vite 演示",
+    "language": "语言",
+    "music": "音乐",
+    "mute": "静音",
+    "unmute": "取消静音"
+  },
+  "npc": {
+    "greeting": "你好，我会说话！"
+  },
+  "messages": {
+    "saveLoaded": "存档已读取",
+    "saveStored": "存档已保存"
+  }
+}
