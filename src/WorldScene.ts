@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import ChunkManager from './world/chunkManager';
 
 type LangKey = 'en' | 'zh';
 
@@ -34,6 +35,10 @@ export default class WorldScene extends Phaser.Scene {
   private lastVolume = 0.5;
   private activeDialogKey: string | null = null;
   private activeDialogOverrides: Partial<Record<LangKey, string>> = {};
+  private chunkManager?: ChunkManager;
+  private readonly tileSize = 32;
+  private readonly chunkTileSize = 64;
+  private readonly chunkViewDistance = 1;
 
   constructor() {
     super('WorldScene');
@@ -56,19 +61,6 @@ export default class WorldScene extends Phaser.Scene {
     this.dictionaries.en = this.cache.json.get('i18n-en') ?? {};
     this.dictionaries.zh = this.cache.json.get('i18n-zh') ?? {};
 
-    const map = this.make.tilemap({ key: 'chunk_0_0' });
-    const tileset = map.addTilesetImage('main', 'tileset', 32, 32, 0, 0);
-    if (!tileset) {
-      throw new Error('Tileset failed to load');
-    }
-
-    const groundLayer = map.createLayer('ground', tileset, 0, 0);
-    const collisionLayer = map.createLayer('collision', tileset, 0, 0);
-    collisionLayer?.setCollisionBetween(1, 1000);
-
-    this.physics.world.setBounds(0, 0, map.widthInPixels, map.heightInPixels);
-
-    // Player
     this.player = this.physics.add.sprite(this.saveData.player.x, this.saveData.player.y, undefined as any);
     this.player.setSize(24, 32);
     this.player.setOffset(-12, -16);
@@ -82,24 +74,16 @@ export default class WorldScene extends Phaser.Scene {
     graphics.destroy();
     this.player.setTexture('player-rect');
 
-    if (collisionLayer) {
-      this.physics.add.collider(this.player, collisionLayer);
-    }
-
-    // NPCs
-    const objectLayer = map.getObjectLayer('objects');
-    if (objectLayer) {
-      objectLayer.objects.forEach((obj) => {
-        if (obj.type === 'npc') {
-          const npc = this.physics.add.sprite(obj.x ?? 0, (obj.y ?? 0) - (obj.height ?? 0), 'npc');
-          npc.setInteractive({ useHandCursor: true });
-          npc.setData('dialogKey', this.findProperty(obj, 'dialogKey'));
-          npc.setData('dialog.en', this.findProperty(obj, 'dialog.en'));
-          npc.setData('dialog.zh', this.findProperty(obj, 'dialog.zh'));
-          npc.on('pointerdown', () => this.showDialog(npc));
-        }
-      });
-    }
+    this.chunkManager = new ChunkManager(this, {
+      tileSize: this.tileSize,
+      chunkTileSize: this.chunkTileSize,
+      tilesetKey: 'tileset',
+      tilesetName: 'main',
+      viewDistance: this.chunkViewDistance,
+      player: this.player,
+      objectFactory: (obj, worldPosition) => this.createWorldObject(obj, worldPosition),
+    });
+    this.chunkManager.updateChunksAround(this.player.x, this.player.y);
 
     this.cameras.main.startFollow(this.player, true, 0.08, 0.08);
     this.cameras.main.setZoom(1.2);
@@ -136,6 +120,7 @@ export default class WorldScene extends Phaser.Scene {
 
   update() {
     if (!this.player || !this.cursors || !this.moveKeys) return;
+    this.chunkManager?.updateChunksAround(this.player.x, this.player.y);
     const body = this.player.body as Phaser.Physics.Arcade.Body;
     const velocity = new Phaser.Math.Vector2(0, 0);
     const keys = this.moveKeys;
@@ -162,6 +147,27 @@ export default class WorldScene extends Phaser.Scene {
   private findProperty(obj: any, key: string) {
     const prop = (obj.properties ?? []).find((p: any) => p.name === key);
     return prop ? prop.value : '';
+  }
+
+  private createWorldObject(
+    obj: Phaser.Types.Tilemaps.TiledObject,
+    worldPosition: { x: number; y: number }
+  ): Phaser.GameObjects.GameObject | null {
+    if (obj.type === 'npc') {
+      const npc = this.physics.add.sprite(
+        worldPosition.x,
+        worldPosition.y - (obj.height ?? 0),
+        'npc'
+      );
+      npc.setInteractive({ useHandCursor: true });
+      npc.setData('dialogKey', this.findProperty(obj, 'dialogKey'));
+      npc.setData('dialog.en', this.findProperty(obj, 'dialog.en'));
+      npc.setData('dialog.zh', this.findProperty(obj, 'dialog.zh'));
+      npc.on('pointerdown', () => this.showDialog(npc));
+      return npc;
+    }
+
+    return null;
   }
 
   private showDialog(npc: Phaser.GameObjects.Sprite) {
