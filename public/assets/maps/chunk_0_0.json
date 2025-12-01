@@ -10343,8 +10343,17 @@
   "tileheight": 32,
   "tilesets": [
     {
+      "columns": 48,
       "firstgid": 1,
-      "source": "../../Full_Liyue.tsx"
+      "image": "../tiles/Full_Liyue.png",
+      "imageheight": 1024,
+      "imagewidth": 1536,
+      "margin": 0,
+      "name": "Full_Liyue",
+      "spacing": 0,
+      "tilecount": 1536,
+      "tileheight": 32,
+      "tilewidth": 32
     }
   ],
   "tilewidth": 32,
