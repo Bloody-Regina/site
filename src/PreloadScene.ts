@@ -6,60 +6,16 @@ export default class PreloadScene extends Phaser.Scene {
   }
 
   preload() {
-    this.load.tilemapTiledJSON('chunk_0_0', 'assets/maps/chunk_0_0.json');
+    this.load.tilemapTiledJSON('Liyue_city', 'assets/maps/Liyue_city.json');
+    this.load.image('Full_Liyue', 'assets/tiles/Full_Liyue.png');
     this.load.audio('bgm', 'assets/audio/串烧.mp3');
     this.load.json('i18n-en', 'i18n/en.json');
     this.load.json('i18n-zh', 'i18n/zh.json');
   }
 
   create() {
-    this.createTilesetTexture();
     this.createNpcTexture();
     this.scene.start('WorldScene');
-  }
-
-  private createTilesetTexture() {
-    const size = 32;
-    const cols = 4;
-    const rows = 4;
-    const canvas = this.textures.createCanvas('tileset', size * cols, size * rows);
-    if (!canvas) return;
-
-    const ctx = canvas.getContext();
-    const colors = [
-      '#4a90e2',
-      '#50e3c2',
-      '#f5a623',
-      '#f8e71c',
-      '#bd10e0',
-      '#9013fe',
-      '#7ed321',
-      '#417505',
-      '#b8e986',
-      '#d0011b',
-      '#8b572a',
-      '#9b9b9b',
-      '#7f8c8d',
-      '#34495e',
-      '#2ecc71',
-      '#c0392b',
-    ];
-
-    if (!ctx) return;
-
-    let index = 0;
-    for (let y = 0; y < rows; y += 1) {
-      for (let x = 0; x < cols; x += 1) {
-        ctx.fillStyle = colors[index % colors.length];
-        ctx.fillRect(x * size, y * size, size, size);
-        ctx.strokeStyle = '#111';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(x * size, y * size, size, size);
-        index += 1;
-      }
-    }
-
-    canvas.refresh();
   }
 
   private createNpcTexture() {

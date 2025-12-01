@@ -7,6 +7,7 @@ export type ChunkManagerOptions = {
   chunkTileSize: number;
   tilesetKey: string;
   tilesetName: string;
+  baseKey?: string;
   viewDistance: number;
   player: Phaser.Types.Physics.Arcade.SpriteWithDynamicBody;
   objectFactory?: (
@@ -21,6 +22,8 @@ export type LoadedChunk = {
   map: Phaser.Tilemaps.Tilemap;
   groundLayer?: Phaser.Tilemaps.TilemapLayer;
   collisionLayer?: Phaser.Tilemaps.TilemapLayer;
+  collisionObjects?: Phaser.GameObjects.Rectangle[];
+  collisionGroup?: Phaser.Physics.Arcade.StaticGroup;
   collider?: Phaser.Physics.Arcade.Collider;
   objects: Phaser.GameObjects.GameObject[];
 };
@@ -143,9 +146,21 @@ export default class ChunkManager {
     collisionLayer?.setDepth(1);
     collisionLayer?.setCollisionBetween(1, 1000);
 
-    const collider = collisionLayer
-      ? this.scene.physics.add.collider(this.options.player, collisionLayer)
-      : undefined;
+    const collisionObjects = this.buildCollisionObjects(map, offsetX, offsetY);
+    const collisionGroup =
+      collisionObjects && collisionObjects.length > 0
+        ? (() => {
+            const group = this.scene.physics.add.staticGroup();
+            collisionObjects.forEach((obj) => group.add(obj));
+            return group;
+          })()
+        : undefined;
+    const collider =
+      collisionLayer && collisionLayer.hasTileAt(0, 0)
+        ? this.scene.physics.add.collider(this.options.player, collisionLayer)
+        : collisionGroup
+          ? this.scene.physics.add.collider(this.options.player, collisionGroup)
+          : undefined;
 
     const objects = this.buildObjects(map, offsetX, offsetY);
 
@@ -155,6 +170,8 @@ export default class ChunkManager {
       map,
       groundLayer,
       collisionLayer,
+      collisionObjects,
+      collisionGroup,
       collider,
       objects,
     };
@@ -194,6 +211,8 @@ export default class ChunkManager {
 
     chunk.collider?.destroy();
     chunk.collisionLayer?.destroy();
+    chunk.collisionObjects?.forEach((obj) => obj.destroy());
+    chunk.collisionGroup?.destroy(true);
     chunk.groundLayer?.destroy();
     chunk.objects.forEach((obj) => obj.destroy());
     chunk.map.destroy();
@@ -212,7 +231,35 @@ export default class ChunkManager {
     this.scene.physics.world.setBounds(minX, minY, width, height);
   }
 
+  private buildCollisionObjects(map: Phaser.Tilemaps.Tilemap, offsetX: number, offsetY: number) {
+    const layer = map.getObjectLayer('collision');
+    if (!layer) return undefined;
+    const objects: Phaser.GameObjects.Rectangle[] = [];
+    layer.objects.forEach((obj) => {
+      const width = obj.width ?? 0;
+      const height = obj.height ?? 0;
+      const x = (obj.x ?? 0) + offsetX;
+      const y = (obj.y ?? 0) + offsetY;
+      const rect = this.scene.add.rectangle(x, y, width, height, 0x000000, 0);
+      rect.setOrigin(0, 0);
+      this.scene.physics.add.existing(rect, true);
+      objects.push(rect);
+    });
+    return objects;
+  }
+
   private chunkKey(coord: ChunkCoord) {
+    if (this.options.baseKey) return this.options.baseKey;
     return `chunk_${coord.x}_${coord.y}`;
+  }
+
+  getChunkContaining(worldX: number, worldY: number): LoadedChunk | undefined {
+    const coord = this.getChunkCoord(worldX, worldY);
+    return this.loadedChunks.get(this.chunkKey(coord));
+  }
+
+  getPrimaryChunk(): LoadedChunk | undefined {
+    const first = this.loadedChunks.values().next();
+    return first.done ? undefined : first.value;
   }
 }
