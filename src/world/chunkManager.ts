@@ -155,8 +155,10 @@ export default class ChunkManager {
             return group;
           })()
         : undefined;
+    const hasCollisionTiles =
+      collisionLayer?.layer.data.some((row) => row.some((tile) => tile && tile.collides)) ?? false;
     const collider =
-      collisionLayer && collisionLayer.hasTileAt(0, 0)
+      collisionLayer && hasCollisionTiles
         ? this.scene.physics.add.collider(this.options.player, collisionLayer)
         : collisionGroup
           ? this.scene.physics.add.collider(this.options.player, collisionGroup)
@@ -311,7 +313,7 @@ export default class ChunkManager {
   }
 
   private chunkKey(coord: ChunkCoord) {
-    if (this.options.baseKey) return this.options.baseKey;
+    if (this.options.baseKey) return `${this.options.baseKey}_${coord.x}_${coord.y}`;
     return `chunk_${coord.x}_${coord.y}`;
   }
 
