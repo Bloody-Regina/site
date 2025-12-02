@@ -11,6 +11,7 @@ type SaveData = {
 };
 
 type GridPoint = { x: number; y: number };
+type WaypointNode = { id: string; pos: Phaser.Math.Vector2; neighbors: Set<string> };
 
 const STORAGE_KEY = 'phaser-vite-demo-save';
 
@@ -26,7 +27,7 @@ export default class WorldScene extends Phaser.Scene {
   private saveData: SaveData = {
     lang: 'en',
     volume: 0.5,
-    player: { x: 100, y: 100 },
+    player: { x: 629, y: 3280 },
     seenDialogs: [],
   };
   private bgm?: Phaser.Sound.BaseSound & { volume: number };
@@ -45,8 +46,11 @@ export default class WorldScene extends Phaser.Scene {
   private interactionHint?: Phaser.GameObjects.Text;
   private interactionKeys?: Phaser.Input.Keyboard.Key[];
   private navGrid?: boolean[][];
+  private navOrigin = new Phaser.Math.Vector2(0, 0);
   private gridWidth = 0;
   private gridHeight = 0;
+  private waypointsLoaded = false;
+  private waypoints: Map<string, WaypointNode> = new Map();
   private autoPath: Phaser.Math.Vector2[] = [];
   private autoPathIndex = 0;
   private readonly autoTurnRate = 0.18;
@@ -60,6 +64,9 @@ export default class WorldScene extends Phaser.Scene {
     path: Phaser.Input.Keyboard.Key;
     log: Phaser.Input.Keyboard.Key;
   };
+  private positionDebugEnabled = false;
+  private positionDebugText?: Phaser.GameObjects.Text;
+  private positionDebugKey?: Phaser.Input.Keyboard.Key;
   private debugButtons?: {
     container: Phaser.GameObjects.Container;
     grid: Phaser.GameObjects.Text;
@@ -90,9 +97,9 @@ export default class WorldScene extends Phaser.Scene {
     this.dictionaries.zh = this.cache.json.get('i18n-zh') ?? {};
 
     this.player = this.physics.add.sprite(this.saveData.player.x, this.saveData.player.y, undefined as any);
-    // Use a small hitbox to make navigation through narrow gaps easier.
-    this.player.setSize(12, 16);
-    this.player.setOffset(-6, -8);
+    // Use an extra-small hitbox to make navigation through tight gaps easier.
+    this.player.setSize(8, 12);
+    this.player.setOffset(-4, -6);
     this.player.setTint(0xffffff);
     this.player.body.setCollideWorldBounds(true);
 
@@ -117,6 +124,7 @@ export default class WorldScene extends Phaser.Scene {
     this.chunkManager.updateChunksAround(this.player.x, this.player.y);
     this.buildNavigationGrid();
     this.ensurePlayerSpawnValid();
+    this.syncWorldBoundsToNav();
     this.registerResizeHandler();
 
     this.cameras.main.startFollow(this.player, true, 0.08, 0.08);
@@ -146,11 +154,13 @@ export default class WorldScene extends Phaser.Scene {
       path: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.F4),
       log: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.F6),
     };
+    this.positionDebugKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.F1);
 
     this.debugKeys.toggle.on('down', () => this.toggleDebug('toggle'));
     this.debugKeys.grid.on('down', () => this.toggleDebug('grid'));
     this.debugKeys.path.on('down', () => this.toggleDebug('path'));
     this.debugKeys.log.on('down', () => this.toggleDebug('log'));
+    this.positionDebugKey.on('down', () => this.togglePositionDebug());
 
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
       this.handleInteraction();
@@ -170,6 +180,15 @@ export default class WorldScene extends Phaser.Scene {
     this.chunkManager?.updateChunksAround(this.player.x, this.player.y);
     const body = this.player.body as Phaser.Physics.Arcade.Body;
     const manualVelocity = this.getManualInputVector();
+    const navBounds = this.getNavBounds();
+    if (navBounds && !this.isInsideNavBounds(this.player.x, this.player.y, navBounds)) {
+      const clampedX = Phaser.Math.Clamp(this.player.x, navBounds.minX, navBounds.maxX - 1);
+      const clampedY = Phaser.Math.Clamp(this.player.y, navBounds.minY, navBounds.maxY - 1);
+      this.player.setPosition(clampedX, clampedY);
+      body.setVelocity(0, 0);
+      this.stopAutoMove();
+      this.debugDirty = true;
+    }
 
     if (manualVelocity.lengthSq() > 0) {
       this.stopAutoMove();
@@ -194,6 +213,9 @@ export default class WorldScene extends Phaser.Scene {
       this.debugDirty = true;
     }
     this.refreshDebug();
+    if (this.positionDebugEnabled) {
+      this.updatePositionDebug();
+    }
 
     if (Math.abs(body.velocity.x) > 0 || Math.abs(body.velocity.y) > 0) {
       this.saveData.player = { x: this.player.x, y: this.player.y };
@@ -218,6 +240,16 @@ export default class WorldScene extends Phaser.Scene {
   private planPathTo(worldX: number, worldY: number) {
     this.buildNavigationGrid();
     if (!this.navGrid) return;
+    this.loadWaypoints();
+
+    const navBounds = this.getNavBounds();
+    if (navBounds && !this.isInsideNavBounds(worldX, worldY, navBounds)) {
+      this.stopAutoMove();
+      if (this.debugFlags.log) {
+        console.log('[pathfind] click outside nav bounds, ignoring', { worldX, worldY, navBounds });
+      }
+      return;
+    }
 
     const start = this.worldToGrid(this.player.x, this.player.y);
     const target = this.worldToGrid(worldX, worldY);
@@ -225,22 +257,12 @@ export default class WorldScene extends Phaser.Scene {
       this.navGrid[start.y][start.x] = true;
     }
 
-    let pathTiles: GridPoint[] | null = null;
-    if (this.isWalkable(target.x, target.y)) {
-      pathTiles = this.findPath(start, target);
-    }
+    const gridPath = this.buildGridPath(start, target);
+    const waypointPath = this.buildWaypointPath(start, target);
+    const chosenPath = this.pickPath(gridPath, waypointPath);
 
-    if (!pathTiles || pathTiles.length === 0) {
-      pathTiles = this.searchNearestReachable(start, target);
-    }
-
-    if (pathTiles && pathTiles.length > 0) {
-      const worldPath = this.toWorldPath(pathTiles);
-      if (worldPath.length > 0) {
-        this.startAutoMove(worldPath);
-      } else {
-        this.stopAutoMove();
-      }
+    if (chosenPath && chosenPath.length > 0) {
+      this.startAutoMove(chosenPath);
     } else {
       this.stopAutoMove();
     }
@@ -252,8 +274,9 @@ export default class WorldScene extends Phaser.Scene {
         target,
         startWalkable: this.isWalkable(start.x, start.y),
         targetWalkable: this.isWalkable(target.x, target.y),
-        pathTiles: pathTiles?.length ?? 0,
-        worldPath: this.autoPath.length,
+        gridPath: gridPath?.length ?? 0,
+        waypointPath: waypointPath?.length ?? 0,
+        chosen: chosenPath?.length ?? 0,
       });
     }
     this.drawDebugGrid();
@@ -273,8 +296,29 @@ export default class WorldScene extends Phaser.Scene {
     this.drawDebugPath();
   }
 
+  private pickPath(
+    gridPath: Phaser.Math.Vector2[] | null,
+    waypointPath: Phaser.Math.Vector2[] | null
+  ): Phaser.Math.Vector2[] | null {
+    if (gridPath && waypointPath) {
+      const gridLen = this.measurePathLength(gridPath);
+      const wpLen = this.measurePathLength(waypointPath);
+      return wpLen < gridLen * 0.9 ? waypointPath : gridPath;
+    }
+    return gridPath ?? waypointPath ?? null;
+  }
+
+  private measurePathLength(path: Phaser.Math.Vector2[]) {
+    if (path.length <= 1) return 0;
+    let dist = 0;
+    for (let i = 1; i < path.length; i += 1) {
+      dist += Phaser.Math.Distance.Between(path[i - 1].x, path[i - 1].y, path[i].x, path[i].y);
+    }
+    return dist;
+  }
+
   private followAutoPath(body: Phaser.Physics.Arcade.Body) {
-    const arrivalThreshold = 6;
+    const arrivalThreshold = 8;
     while (this.autoPathIndex < this.autoPath.length) {
       const target = this.autoPath[this.autoPathIndex];
       const toTarget = new Phaser.Math.Vector2(target.x - this.player.x, target.y - this.player.y);
@@ -295,10 +339,194 @@ export default class WorldScene extends Phaser.Scene {
     this.stopAutoMove();
   }
 
+  private buildGridPath(start: GridPoint, target: GridPoint): Phaser.Math.Vector2[] | null {
+    let pathTiles: GridPoint[] | null = null;
+    if (this.isWalkable(target.x, target.y)) {
+      pathTiles = this.findPath(start, target);
+    }
+
+    if (!pathTiles || pathTiles.length === 0) {
+      pathTiles = this.searchNearestReachable(start, target);
+    }
+
+    if (pathTiles && pathTiles.length > 0) {
+      const worldPath = this.toWorldPath(pathTiles);
+      return worldPath.length > 0 ? worldPath : null;
+    }
+    return null;
+  }
+
+  private buildWaypointPath(start: GridPoint, target: GridPoint): Phaser.Math.Vector2[] | null {
+    if (!this.navGrid || this.waypoints.size === 0) return null;
+
+    const startWorld = this.gridToWorld(start);
+    const targetWorld = this.gridToWorld(target);
+    const startNode = this.findNearestWaypoint(startWorld);
+    const targetNode = this.findNearestWaypoint(targetWorld);
+    if (!startNode || !targetNode) return null;
+
+    const nodePathIds = this.findWaypointGraphPath(startNode.id, targetNode.id);
+    if (!nodePathIds) return null;
+    const nodePath = nodePathIds
+      .map((id) => this.waypoints.get(id))
+      .filter((n): n is WaypointNode => Boolean(n));
+    if (nodePath.length === 0) return null;
+
+    const path: Phaser.Math.Vector2[] = [];
+    const pushUnique = (pt: Phaser.Math.Vector2) => {
+      const last = path[path.length - 1];
+      if (!last || Phaser.Math.Distance.Between(last.x, last.y, pt.x, pt.y) > 1) {
+        path.push(pt.clone());
+      }
+    };
+
+    const startSeg = this.buildGridPath(start, this.worldToGrid(startNode.pos.x, startNode.pos.y));
+    if (!startSeg) return null;
+    startSeg.forEach((p) => pushUnique(p));
+
+    nodePath.forEach((node) => pushUnique(node.pos));
+
+    const endSeg = this.buildGridPath(this.worldToGrid(targetNode.pos.x, targetNode.pos.y), target);
+    if (!endSeg) return null;
+    endSeg.forEach((p, idx) => {
+      if (idx === 0) {
+        pushUnique(p);
+      } else {
+        pushUnique(p);
+      }
+    });
+
+    return path.length > 0 ? path : null;
+  }
+
+  private loadWaypoints() {
+    if (this.waypointsLoaded || !this.chunkManager) return;
+    const chunk = this.chunkManager.getPrimaryChunk();
+    if (!chunk) return;
+    const layer = chunk.map.getObjectLayer('waypoints');
+    if (!layer) {
+      this.waypointsLoaded = true;
+      return;
+    }
+
+    layer.objects.forEach((obj) => {
+      const id = String(obj.name ?? obj.id ?? `${obj.x},${obj.y}`);
+      const x = (obj.x ?? 0) + this.navOrigin.x;
+      const y = (obj.y ?? 0) + this.navOrigin.y;
+      const linksProp = this.findProperty(obj, 'links');
+      const links = typeof linksProp === 'string' ? linksProp.split(',').map((v) => v.trim()).filter(Boolean) : [];
+      this.waypoints.set(id, { id, pos: new Phaser.Math.Vector2(x, y), neighbors: new Set(links) });
+    });
+
+    // Auto-connect nodes that have no explicit links to their nearest neighbors within a reasonable radius.
+    const nodes = Array.from(this.waypoints.values());
+    nodes.forEach((node) => {
+      if (node.neighbors.size > 0) return;
+      const nearest = nodes
+        .filter((n) => n.id !== node.id)
+        .map((n) => ({ n, dist: Phaser.Math.Distance.Between(n.pos.x, n.pos.y, node.pos.x, node.pos.y) }))
+        .sort((a, b) => a.dist - b.dist)
+        .filter((a) => a.dist <= 360)
+        .slice(0, 4);
+      nearest.forEach(({ n }) => node.neighbors.add(n.id));
+    });
+
+    // Ensure links are bidirectional where possible.
+    nodes.forEach((node) => {
+      node.neighbors.forEach((neighborId) => {
+        const neighbor = this.waypoints.get(neighborId);
+        if (neighbor) {
+          neighbor.neighbors.add(node.id);
+        }
+      });
+    });
+
+    this.waypointsLoaded = true;
+  }
+
+  private findNearestWaypoint(pos: Phaser.Math.Vector2, maxDistance = 600): WaypointNode | null {
+    let closest: WaypointNode | null = null;
+    let best = Number.MAX_VALUE;
+    this.waypoints.forEach((node) => {
+      const dist = Phaser.Math.Distance.Between(pos.x, pos.y, node.pos.x, node.pos.y);
+      if (dist < best && dist <= maxDistance) {
+        best = dist;
+        closest = node;
+      }
+    });
+    return closest;
+  }
+
+  private findWaypointGraphPath(startId: string, goalId: string): string[] | null {
+    if (!this.waypoints.has(startId) || !this.waypoints.has(goalId)) return null;
+    const openSet = new Set<string>([startId]);
+    const cameFrom = new Map<string, string>();
+    const gScore = new Map<string, number>([[startId, 0]]);
+    const fScore = new Map<string, number>([[startId, this.waypointHeuristic(startId, goalId)]]);
+
+    while (openSet.size > 0) {
+      let current = '';
+      let lowest = Number.MAX_VALUE;
+      openSet.forEach((id) => {
+        const score = fScore.get(id) ?? Number.MAX_VALUE;
+        if (score < lowest) {
+          lowest = score;
+          current = id;
+        }
+      });
+
+      if (current === goalId) {
+        return this.reconstructWaypointPath(cameFrom, current);
+      }
+
+      openSet.delete(current);
+      const node = this.waypoints.get(current);
+      if (!node) continue;
+
+      node.neighbors.forEach((neighborId) => {
+        const neighbor = this.waypoints.get(neighborId);
+        if (!neighbor) return;
+        const tentativeG =
+          (gScore.get(current) ?? Number.MAX_VALUE) +
+          Phaser.Math.Distance.Between(node.pos.x, node.pos.y, neighbor.pos.x, neighbor.pos.y);
+        const knownG = gScore.get(neighborId) ?? Number.MAX_VALUE;
+        if (tentativeG < knownG) {
+          cameFrom.set(neighborId, current);
+          gScore.set(neighborId, tentativeG);
+          fScore.set(neighborId, tentativeG + this.waypointHeuristic(neighborId, goalId));
+          openSet.add(neighborId);
+        }
+      });
+    }
+
+    return null;
+  }
+
+  private waypointHeuristic(aId: string, bId: string) {
+    const a = this.waypoints.get(aId);
+    const b = this.waypoints.get(bId);
+    if (!a || !b) return 0;
+    return Phaser.Math.Distance.Between(a.pos.x, a.pos.y, b.pos.x, b.pos.y);
+  }
+
+  private reconstructWaypointPath(cameFrom: Map<string, string>, current: string): string[] {
+    const path: string[] = [current];
+    let cursor = current;
+    while (cameFrom.has(cursor)) {
+      cursor = cameFrom.get(cursor)!;
+      path.push(cursor);
+    }
+    return path.reverse();
+  }
+
   private buildNavigationGrid() {
     if (this.navGrid || !this.chunkManager) return;
     const chunk = this.chunkManager.getPrimaryChunk();
     if (!chunk) return;
+
+    const offsetX = chunk.coord.x * this.chunkTileSize * this.tileSize;
+    const offsetY = chunk.coord.y * this.chunkTileSize * this.tileSize;
+    this.navOrigin.set(offsetX, offsetY);
 
     // Precompute walkable tiles from collision data so pathfinding stays fast.
     this.gridWidth = chunk.map.width;
@@ -315,10 +543,26 @@ export default class WorldScene extends Phaser.Scene {
 
     chunk.collisionObjects?.forEach((rect) => {
       const bounds = rect.getBounds();
-      const minX = Phaser.Math.Clamp(Math.floor(bounds.left / this.tileSize), 0, this.gridWidth - 1);
-      const maxX = Phaser.Math.Clamp(Math.floor((bounds.right - 1) / this.tileSize), 0, this.gridWidth - 1);
-      const minY = Phaser.Math.Clamp(Math.floor(bounds.top / this.tileSize), 0, this.gridHeight - 1);
-      const maxY = Phaser.Math.Clamp(Math.floor((bounds.bottom - 1) / this.tileSize), 0, this.gridHeight - 1);
+      const minX = Phaser.Math.Clamp(
+        Math.floor((bounds.left - offsetX) / this.tileSize),
+        0,
+        this.gridWidth - 1
+      );
+      const maxX = Phaser.Math.Clamp(
+        Math.floor((bounds.right - 1 - offsetX) / this.tileSize),
+        0,
+        this.gridWidth - 1
+      );
+      const minY = Phaser.Math.Clamp(
+        Math.floor((bounds.top - offsetY) / this.tileSize),
+        0,
+        this.gridHeight - 1
+      );
+      const maxY = Phaser.Math.Clamp(
+        Math.floor((bounds.bottom - 1 - offsetY) / this.tileSize),
+        0,
+        this.gridHeight - 1
+      );
 
       for (let y = minY; y <= maxY; y += 1) {
         for (let x = minX; x <= maxX; x += 1) {
@@ -338,14 +582,18 @@ export default class WorldScene extends Phaser.Scene {
 
   private ensurePlayerSpawnValid() {
     if (!this.navGrid) return;
-    const maxX = this.gridWidth * this.tileSize;
-    const maxY = this.gridHeight * this.tileSize;
-    const clampedX = Phaser.Math.Clamp(this.saveData.player.x, 0, maxX - 1);
-    const clampedY = Phaser.Math.Clamp(this.saveData.player.y, 0, maxY - 1);
+    const minX = this.navOrigin.x;
+    const minY = this.navOrigin.y;
+    const maxX = minX + this.gridWidth * this.tileSize;
+    const maxY = minY + this.gridHeight * this.tileSize;
+    const clampedX = Phaser.Math.Clamp(this.saveData.player.x, minX, maxX - 1);
+    const clampedY = Phaser.Math.Clamp(this.saveData.player.y, minY, maxY - 1);
     let gridPos = this.worldToGrid(clampedX, clampedY);
 
     if (!this.isWalkable(gridPos.x, gridPos.y)) {
-      const fallbackGrid = this.searchNearestWalkable(gridPos) ?? this.searchNearestWalkable(this.worldToGrid(maxX / 2, maxY / 2));
+      const fallbackGrid =
+        this.searchNearestWalkable(gridPos) ??
+        this.searchNearestWalkable(this.worldToGrid((minX + maxX) / 2, (minY + maxY) / 2));
       if (fallbackGrid) {
         gridPos = fallbackGrid;
       }
@@ -357,29 +605,80 @@ export default class WorldScene extends Phaser.Scene {
   }
 
   private worldToGrid(worldX: number, worldY: number): GridPoint {
+    const localX = worldX - this.navOrigin.x;
+    const localY = worldY - this.navOrigin.y;
     return {
-      x: Phaser.Math.Clamp(Math.floor(worldX / this.tileSize), 0, Math.max(this.gridWidth - 1, 0)),
-      y: Phaser.Math.Clamp(Math.floor(worldY / this.tileSize), 0, Math.max(this.gridHeight - 1, 0)),
+      x: Phaser.Math.Clamp(Math.floor(localX / this.tileSize), 0, Math.max(this.gridWidth - 1, 0)),
+      y: Phaser.Math.Clamp(Math.floor(localY / this.tileSize), 0, Math.max(this.gridHeight - 1, 0)),
     };
+  }
+
+  private getNavBounds() {
+    if (!this.navGrid) return null;
+    const minX = this.navOrigin.x;
+    const minY = this.navOrigin.y;
+    const maxX = minX + this.gridWidth * this.tileSize;
+    const maxY = minY + this.gridHeight * this.tileSize;
+    return { minX, minY, maxX, maxY };
+  }
+
+  private isInsideNavBounds(worldX: number, worldY: number, bounds: { minX: number; minY: number; maxX: number; maxY: number }) {
+    return worldX >= bounds.minX && worldX < bounds.maxX && worldY >= bounds.minY && worldY < bounds.maxY;
+  }
+
+  private syncWorldBoundsToNav() {
+    const bounds = this.getNavBounds();
+    if (!bounds) return;
+    const width = bounds.maxX - bounds.minX;
+    const height = bounds.maxY - bounds.minY;
+    this.physics.world.setBounds(bounds.minX, bounds.minY, width, height);
+    this.player.body.setCollideWorldBounds(true);
   }
 
   private gridToWorld(point: GridPoint) {
     return new Phaser.Math.Vector2(
-      point.x * this.tileSize + this.tileSize / 2,
-      point.y * this.tileSize + this.tileSize / 2
+      point.x * this.tileSize + this.tileSize / 2 + this.navOrigin.x,
+      point.y * this.tileSize + this.tileSize / 2 + this.navOrigin.y
     );
   }
 
   private getNeighbors(node: GridPoint): GridPoint[] {
-    const deltas = [
+    const axial = [
       { x: 1, y: 0 },
       { x: -1, y: 0 },
       { x: 0, y: 1 },
       { x: 0, y: -1 },
     ];
-    return deltas
-      .map((d) => ({ x: node.x + d.x, y: node.y + d.y }))
-      .filter((p) => p.x >= 0 && p.x < this.gridWidth && p.y >= 0 && p.y < this.gridHeight);
+    const diagonal = [
+      { x: 1, y: 1 },
+      { x: 1, y: -1 },
+      { x: -1, y: 1 },
+      { x: -1, y: -1 },
+    ];
+
+    const neighbors: GridPoint[] = [];
+    for (const d of axial) {
+      const nx = node.x + d.x;
+      const ny = node.y + d.y;
+      if (nx >= 0 && nx < this.gridWidth && ny >= 0 && ny < this.gridHeight) {
+        neighbors.push({ x: nx, y: ny });
+      }
+    }
+
+    for (const d of diagonal) {
+      const nx = node.x + d.x;
+      const ny = node.y + d.y;
+      const withinBounds = nx >= 0 && nx < this.gridWidth && ny >= 0 && ny < this.gridHeight;
+      if (!withinBounds) continue;
+      // Prevent cutting corners through walls: both adjacent axial tiles must be walkable.
+      const sideA = this.isWalkable(node.x, ny);
+      const sideB = this.isWalkable(nx, node.y);
+      if (sideA && sideB) {
+        neighbors.push({ x: nx, y: ny });
+      }
+    }
+
+    return neighbors;
   }
 
   private nodeKey(node: GridPoint) {
@@ -539,11 +838,26 @@ export default class WorldScene extends Phaser.Scene {
     } else {
       this.debugFlags[kind] = !this.debugFlags[kind];
     }
+    this.debugFlags.enabled = this.debugFlags.grid || this.debugFlags.path || this.debugFlags.log;
     this.debugDirty = true;
     this.drawDebugGrid();
     this.drawDebugPath();
+    if (!this.debugFlags.grid && !this.debugFlags.path) {
+      this.debugGraphics?.clear();
+    }
     if (this.debugFlags.log) {
       console.log('[debug] flags', this.debugFlags);
+    }
+  }
+
+  private togglePositionDebug() {
+    this.positionDebugEnabled = !this.positionDebugEnabled;
+    if (this.positionDebugEnabled) {
+      this.ensurePositionDebugText();
+      this.updatePositionDebug(true);
+      this.positionDebugText?.setVisible(true);
+    } else {
+      this.positionDebugText?.setVisible(false);
     }
   }
 
@@ -561,19 +875,64 @@ export default class WorldScene extends Phaser.Scene {
     g.lineStyle(1, 0xffffff, 0.08);
 
     const reachable = this.collectReachableTiles();
+    const dotColor = 0x44ff88;
+    const dotAlpha = 0.5;
+    const dotRadius = Math.max(2, Math.floor(this.tileSize / 6));
+
     for (let y = 0; y < this.gridHeight; y += 1) {
       for (let x = 0; x < this.gridWidth; x += 1) {
-        const worldX = x * this.tileSize;
-        const worldY = y * this.tileSize;
-        if (!this.navGrid[y][x]) {
-          g.fillStyle(0xff4444, 0.35);
-          g.fillRect(worldX, worldY, this.tileSize, this.tileSize);
-        } else if (reachable.has(`${x},${y}`)) {
-          g.fillStyle(0x44ff88, 0.2);
-          g.fillRect(worldX, worldY, this.tileSize, this.tileSize);
+        const worldX = this.navOrigin.x + x * this.tileSize;
+        const worldY = this.navOrigin.y + y * this.tileSize;
+        if (this.navGrid[y][x] && reachable.has(`${x},${y}`)) {
+          g.fillStyle(dotColor, dotAlpha);
+          g.fillCircle(worldX + this.tileSize / 2, worldY + this.tileSize / 2, dotRadius);
         }
         g.strokeRect(worldX, worldY, this.tileSize, this.tileSize);
       }
+    }
+
+    const primary = this.chunkManager?.getPrimaryChunk();
+    if (primary?.collisionObjects?.length) {
+      const fillCol = 0xff8888;
+      g.lineStyle(2, 0xff0000, 0.9);
+      primary.collisionObjects.forEach((obj) => {
+        const points = (obj as any).getData?.('polygon') as { x: number; y: number }[] | undefined;
+        if (points && points.length >= 3) {
+          g.fillStyle(fillCol, 0.28);
+          g.fillPoints(points, true);
+          g.beginPath();
+          g.moveTo(points[0].x, points[0].y);
+          for (let i = 1; i < points.length; i += 1) {
+            g.lineTo(points[i].x, points[i].y);
+          }
+          g.closePath();
+          g.strokePath();
+        } else {
+          const b = obj.getBounds();
+          g.fillStyle(fillCol, 0.22);
+          g.fillRect(b.x, b.y, b.width, b.height);
+          g.strokeRect(b.x, b.y, b.width, b.height);
+        }
+      });
+    }
+
+    // Draw collision tiles (if any) as light red overlay for completeness.
+    const collLayer = primary?.collisionLayer;
+    if (collLayer) {
+      g.fillStyle(0xff8888, 0.2);
+      collLayer.forEachTile((tile) => {
+        if (!tile || !tile.collides) return;
+        const wx = tile.pixelX + this.navOrigin.x;
+        const wy = tile.pixelY + this.navOrigin.y;
+        g.fillRect(wx, wy, this.tileSize, this.tileSize);
+        g.strokeRect(wx, wy, this.tileSize, this.tileSize);
+      });
+    }
+
+    const navBounds = this.getNavBounds();
+    if (navBounds) {
+      g.lineStyle(3, 0xffaa00, 0.85);
+      g.strokeRect(navBounds.minX, navBounds.minY, navBounds.maxX - navBounds.minX, navBounds.maxY - navBounds.minY);
     }
 
     if (this.debugFlags.path) {
@@ -620,6 +979,9 @@ export default class WorldScene extends Phaser.Scene {
       }
       if (this.musicButton) {
         this.musicButton.setPosition(12, gameSize.height - 50);
+      }
+      if (this.positionDebugText) {
+        this.positionDebugText.setPosition(gameSize.width / 2, gameSize.height / 2);
       }
       if (this.debugButtons) {
         this.debugButtons.container.list.forEach((obj) => {
@@ -810,6 +1172,29 @@ export default class WorldScene extends Phaser.Scene {
     container.setDepth(6);
     this.debugButtons = { container, grid: gridBtn, path: pathBtn, log: logBtn };
     this.positionDebugUi();
+  }
+
+  private ensurePositionDebugText() {
+    if (this.positionDebugText) return;
+    this.positionDebugText = this.add
+      .text(this.scale.width / 2, this.scale.height / 2, '', {
+        fontSize: '18px',
+        color: '#ffe08a',
+        backgroundColor: '#000000c0',
+        padding: { x: 12, y: 8 },
+      })
+      .setOrigin(0.5)
+      .setScrollFactor(0)
+      .setDepth(12);
+  }
+
+  private updatePositionDebug(force = false) {
+    if (!this.positionDebugEnabled || !this.player) return;
+    this.ensurePositionDebugText();
+    const posText = `Player Position\nx: ${this.player.x.toFixed(1)}  y: ${this.player.y.toFixed(1)}`;
+    if (force || this.positionDebugText?.text !== posText) {
+      this.positionDebugText?.setText(posText);
+    }
   }
 
   private updateUiText() {

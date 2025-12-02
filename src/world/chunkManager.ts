@@ -235,15 +235,77 @@ export default class ChunkManager {
     const layer = map.getObjectLayer('collision');
     if (!layer) return undefined;
     const objects: Phaser.GameObjects.Rectangle[] = [];
-    layer.objects.forEach((obj) => {
-      const width = obj.width ?? 0;
-      const height = obj.height ?? 0;
-      const x = (obj.x ?? 0) + offsetX;
-      const y = (obj.y ?? 0) + offsetY;
+    const tileSize = this.options.tileSize;
+    const cellSize = Math.max(2, Math.floor(tileSize / 4));
+
+    const addRect = (
+      x: number,
+      y: number,
+      width: number,
+      height: number,
+      polygonPoints?: { x: number; y: number }[]
+    ) => {
       const rect = this.scene.add.rectangle(x, y, width, height, 0x000000, 0);
       rect.setOrigin(0, 0);
       this.scene.physics.add.existing(rect, true);
+      if (polygonPoints && polygonPoints.length >= 3) {
+        rect.setData('polygon', polygonPoints);
+      }
       objects.push(rect);
+    };
+
+    const addPolygon = (obj: Phaser.Types.Tilemaps.TiledObject) => {
+      const rawPoints = obj.polygon ?? obj.polyline ?? [];
+      const points = rawPoints.map((p) => ({
+        x: (obj.x ?? 0) + (p.x ?? 0) + offsetX,
+        y: (obj.y ?? 0) + (p.y ?? 0) + offsetY,
+      }));
+      if (points.length < 3) return;
+      const first = points[0];
+      const last = points[points.length - 1];
+      if (first.x !== last.x || first.y !== last.y) {
+        points.push({ ...first });
+      }
+
+      const poly = new Phaser.Geom.Polygon(points);
+      const bounds = Phaser.Geom.Polygon.GetAABB(poly);
+      const minCellX = Math.floor(bounds.x / cellSize);
+      const maxCellX = Math.floor((bounds.x + bounds.width - 1) / cellSize);
+      const minCellY = Math.floor(bounds.y / cellSize);
+      const maxCellY = Math.floor((bounds.y + bounds.height - 1) / cellSize);
+      let tagged = false;
+
+      for (let cy = minCellY; cy <= maxCellY; cy += 1) {
+        let runStart: number | null = null;
+        for (let cx = minCellX; cx <= maxCellX; cx += 1) {
+          const px = cx * cellSize + cellSize / 2;
+          const py = cy * cellSize + cellSize / 2;
+          const inside = Phaser.Geom.Polygon.Contains(poly, px, py);
+          if (inside) {
+            if (runStart === null) runStart = cx;
+          } else if (runStart !== null) {
+            addRect(runStart * cellSize, cy * cellSize, (cx - runStart) * cellSize, cellSize, tagged ? undefined : points);
+            tagged = true;
+            runStart = null;
+          }
+        }
+        if (runStart !== null) {
+          addRect(runStart * cellSize, cy * cellSize, (maxCellX - runStart + 1) * cellSize, cellSize, tagged ? undefined : points);
+          tagged = true;
+        }
+      }
+    };
+
+    layer.objects.forEach((obj) => {
+      if (obj.polygon || obj.polyline) {
+        addPolygon(obj);
+      } else {
+        const width = obj.width ?? 0;
+        const height = obj.height ?? 0;
+        const x = (obj.x ?? 0) + offsetX;
+        const y = (obj.y ?? 0) + offsetY;
+        addRect(x, y, width, height);
+      }
     });
     return objects;
   }
