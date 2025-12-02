@@ -313,7 +313,7 @@ export default class ChunkManager {
   }
 
   private chunkKey(coord: ChunkCoord) {
-    if (this.options.baseKey) return `${this.options.baseKey}_${coord.x}_${coord.y}`;
+    if (this.options.baseKey) return this.options.baseKey;
     return `chunk_${coord.x}_${coord.y}`;
   }
 

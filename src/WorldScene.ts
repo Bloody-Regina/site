@@ -13,8 +13,6 @@ type SaveData = {
 type GridPoint = { x: number; y: number };
 type WaypointNode = { id: string; pos: Phaser.Math.Vector2; neighbors: Set<string> };
 
-const STORAGE_KEY = 'phaser-vite-demo-save';
-
 export default class WorldScene extends Phaser.Scene {
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private player!: Phaser.Types.Physics.Arcade.SpriteWithDynamicBody;
@@ -27,7 +25,7 @@ export default class WorldScene extends Phaser.Scene {
   private saveData: SaveData = {
     lang: 'en',
     volume: 0.5,
-    player: { x: 629, y: 3280 },
+    player: { x: 740, y: 3224 },
     seenDialogs: [],
   };
   private bgm?: Phaser.Sound.BaseSound & { volume: number };
@@ -73,6 +71,9 @@ export default class WorldScene extends Phaser.Scene {
     path: Phaser.GameObjects.Text;
     log: Phaser.GameObjects.Text;
   };
+  private uiContainer?: Phaser.GameObjects.Container;
+  private uiCamera?: Phaser.Cameras.Scene2D.Camera;
+  private lastUiIgnoreCount = 0;
   private resizeHandler?: (gameSize: Phaser.Structs.Size) => void;
 
   constructor() {
@@ -80,14 +81,6 @@ export default class WorldScene extends Phaser.Scene {
   }
 
   init() {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-      try {
-        this.saveData = { ...this.saveData, ...JSON.parse(saved) };
-      } catch (err) {
-        console.warn('Failed to parse save data', err);
-      }
-    }
     this.lang = this.saveData.lang;
     this.lastVolume = this.saveData.volume || 0.5;
   }
@@ -172,6 +165,7 @@ export default class WorldScene extends Phaser.Scene {
 
     this.createUI();
     this.createDebugUi();
+    this.setupUiCamera();
     this.updateUiText();
   }
 
@@ -219,8 +213,9 @@ export default class WorldScene extends Phaser.Scene {
 
     if (Math.abs(body.velocity.x) > 0 || Math.abs(body.velocity.y) > 0) {
       this.saveData.player = { x: this.player.x, y: this.player.y };
-      this.persist();
     }
+
+    this.refreshUiCameraIgnore();
   }
 
   private getManualInputVector() {
@@ -983,6 +978,10 @@ export default class WorldScene extends Phaser.Scene {
       if (this.positionDebugText) {
         this.positionDebugText.setPosition(gameSize.width / 2, gameSize.height / 2);
       }
+      if (this.uiCamera) {
+        this.uiCamera.setViewport(0, 0, gameSize.width, gameSize.height);
+        this.uiCamera.setScroll(0, 0);
+      }
       if (this.debugButtons) {
         this.debugButtons.container.list.forEach((obj) => {
           if ('setScrollFactor' in obj && typeof (obj as any).setScrollFactor === 'function') {
@@ -990,6 +989,7 @@ export default class WorldScene extends Phaser.Scene {
           }
         });
       }
+      this.refreshUiCameraIgnore(true);
     };
     this.scale.on(Phaser.Scale.Events.RESIZE, this.resizeHandler);
     this.positionDebugUi();
@@ -1075,13 +1075,16 @@ export default class WorldScene extends Phaser.Scene {
         padding: { x: 8, y: 8 },
         wordWrap: { width: 320 },
       }).setScrollFactor(0);
+      if (this.uiContainer) {
+        this.uiContainer.add(this.dialogText);
+      }
+      this.refreshUiCameraIgnore(true);
     } else {
       this.dialogText.setText(dialogText);
     }
 
     if (!this.saveData.seenDialogs.includes(dialogKey)) {
       this.saveData.seenDialogs.push(dialogKey);
-      this.persist();
     }
 
     this.activeDialogKey = dialogKey;
@@ -1129,7 +1132,6 @@ export default class WorldScene extends Phaser.Scene {
       this.saveData.lang = this.lang;
       this.updateUiText();
       this.refreshDialogText();
-      this.persist();
     });
 
     this.musicButton.on('pointerdown', () => {
@@ -1174,6 +1176,38 @@ export default class WorldScene extends Phaser.Scene {
     this.positionDebugUi();
   }
 
+  private setupUiCamera() {
+    const elements: Phaser.GameObjects.GameObject[] = [];
+    if (this.langButton) elements.push(this.langButton);
+    if (this.musicButton) elements.push(this.musicButton);
+    if (this.positionDebugText) elements.push(this.positionDebugText);
+    if (this.debugButtons?.container) elements.push(this.debugButtons.container);
+    if (this.dialogText) elements.push(this.dialogText);
+
+    this.uiContainer = this.add.container(0, 0, elements);
+    this.uiContainer.setScrollFactor(0);
+    this.uiContainer.setDepth(1000);
+
+    this.cameras.main.ignore(this.uiContainer);
+    this.uiCamera = this.cameras.add(0, 0, this.scale.width, this.scale.height);
+    this.uiCamera.setZoom(1);
+    this.uiCamera.setScroll(0, 0);
+    this.uiCamera.setBackgroundColor(undefined);
+
+    this.refreshUiCameraIgnore(true);
+  }
+
+  private refreshUiCameraIgnore(force = false) {
+    if (!this.uiCamera || !this.uiContainer) return;
+    const currentCount = this.children.list.length;
+    if (!force && currentCount === this.lastUiIgnoreCount) return;
+    this.lastUiIgnoreCount = currentCount;
+    const toIgnore = this.children.list.filter(
+      (obj) => obj !== this.uiContainer && obj.parentContainer !== this.uiContainer
+    );
+    this.uiCamera.ignore(toIgnore);
+  }
+
   private ensurePositionDebugText() {
     if (this.positionDebugText) return;
     this.positionDebugText = this.add
@@ -1186,6 +1220,10 @@ export default class WorldScene extends Phaser.Scene {
       .setOrigin(0.5)
       .setScrollFactor(0)
       .setDepth(12);
+    if (this.uiContainer) {
+      this.uiContainer.add(this.positionDebugText);
+    }
+    this.refreshUiCameraIgnore(true);
   }
 
   private updatePositionDebug(force = false) {
@@ -1239,7 +1277,6 @@ export default class WorldScene extends Phaser.Scene {
         this.bgm.resume();
       }
     }
-    this.persist();
     this.updateUiText();
   }
 
@@ -1303,9 +1340,5 @@ export default class WorldScene extends Phaser.Scene {
   private handleInteraction() {
     this.interacted = true;
     this.tryStartBgm();
-  }
-
-  private persist() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(this.saveData));
   }
 }
