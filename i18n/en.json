@@ -1,0 +1,16 @@
+{
+  "ui": {
+    "title": "Phaser Vite Demo",
+    "language": "Language",
+    "music": "Music",
+    "mute": "Mute",
+    "unmute": "Unmute"
+  },
+  "npc": {
+    "greeting": "Hello, I can talk!"
+  },
+  "messages": {
+    "saveLoaded": "Save loaded",
+    "saveStored": "Progress saved"
+  }
+}
