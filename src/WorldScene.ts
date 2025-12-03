@@ -22,10 +22,11 @@ export default class WorldScene extends Phaser.Scene {
   private musicButton?: Phaser.GameObjects.Text;
   private lang: LangKey = 'en';
   private dictionaries: Record<LangKey, Record<string, any>> = { en: {}, zh: {} };
+  private readonly spawnPoint = { x: 740, y: 3224 };
   private saveData: SaveData = {
     lang: 'en',
     volume: 0.5,
-    player: { x: 740, y: 3224 },
+    player: { x: this.spawnPoint.x, y: this.spawnPoint.y },
     seenDialogs: [],
   };
   private bgm?: Phaser.Sound.BaseSound & { volume: number };
@@ -56,6 +57,7 @@ export default class WorldScene extends Phaser.Scene {
   private debugFlags = { enabled: false, grid: false, path: false, log: false };
   private debugDirty = false;
   private debugLastPlayerTile?: GridPoint;
+  private respawnKey?: Phaser.Input.Keyboard.Key;
   private debugKeys?: {
     toggle: Phaser.Input.Keyboard.Key;
     grid: Phaser.Input.Keyboard.Key;
@@ -140,6 +142,7 @@ export default class WorldScene extends Phaser.Scene {
       keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.E),
       keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE),
     ];
+    this.respawnKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.R);
 
     this.debugKeys = {
       toggle: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.F2),
@@ -171,6 +174,9 @@ export default class WorldScene extends Phaser.Scene {
 
   update() {
     if (!this.player || !this.cursors || !this.moveKeys) return;
+    if (this.respawnKey && Phaser.Input.Keyboard.JustDown(this.respawnKey)) {
+      this.returnToSpawn();
+    }
     this.chunkManager?.updateChunksAround(this.player.x, this.player.y);
     const body = this.player.body as Phaser.Physics.Arcade.Body;
     const manualVelocity = this.getManualInputVector();
@@ -597,6 +603,27 @@ export default class WorldScene extends Phaser.Scene {
     const worldPos = this.gridToWorld(gridPos);
     this.player.setPosition(worldPos.x, worldPos.y);
     this.saveData.player = { x: worldPos.x, y: worldPos.y };
+  }
+
+  private returnToSpawn() {
+    if (!this.navGrid) return;
+    const bounds = this.getNavBounds();
+    const body = this.player.body as Phaser.Physics.Arcade.Body;
+    this.stopAutoMove();
+    body.setVelocity(0, 0);
+
+    const targetX = bounds ? Phaser.Math.Clamp(this.spawnPoint.x, bounds.minX, bounds.maxX - 1) : this.spawnPoint.x;
+    const targetY = bounds ? Phaser.Math.Clamp(this.spawnPoint.y, bounds.minY, bounds.maxY - 1) : this.spawnPoint.y;
+    let gridPos = this.worldToGrid(targetX, targetY);
+    const fallbackGrid = this.searchNearestWalkable(gridPos);
+    if (fallbackGrid) {
+      gridPos = fallbackGrid;
+    }
+
+    const worldPos = this.gridToWorld(gridPos);
+    this.player.setPosition(worldPos.x, worldPos.y);
+    this.saveData.player = { x: worldPos.x, y: worldPos.y };
+    this.debugDirty = true;
   }
 
   private worldToGrid(worldX: number, worldY: number): GridPoint {
