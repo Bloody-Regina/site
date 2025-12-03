@@ -7,7 +7,7 @@ export default class BootScene extends Phaser.Scene {
 
   create() {
     this.cameras.main.setBackgroundColor('#1b1f2f');
-    this.scale.scaleMode = Phaser.Scale.ScaleModes.FIT;
+    this.scale.scaleMode = Phaser.Scale.ScaleModes.RESIZE;
     this.scale.autoCenter = Phaser.Scale.CENTER_BOTH;
     this.scale.refresh();
     this.scene.start('PreloadScene');
