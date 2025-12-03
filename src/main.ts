@@ -7,8 +7,6 @@ const config: Phaser.Types.Core.GameConfig = {
   type: Phaser.AUTO,
   parent: 'app',
   backgroundColor: '#0f172a',
-  width: window.innerWidth,
-  height: window.innerHeight,
   render: { pixelArt: true },
   physics: {
     default: 'arcade',
